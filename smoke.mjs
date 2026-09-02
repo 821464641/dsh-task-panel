@@ -69,7 +69,8 @@ apply(ctx)
 
 const convention = promptSections.find((s) => s.name === 'task-panel:task-convention')
 if (convention === undefined) throw new Error('task convention prompt section not registered')
-if (!convention.text.includes('用户可见的任务')) throw new Error('convention text mismatch')
+if (!convention.text.includes('去做某件事')) throw new Error('convention lacks expanded short-term rule')
+if (!convention.text.includes('执行过程里的操作不算任务')) throw new Error('convention lacks execution-exclusion rule')
 if (!convention.text.includes('长期任务')) throw new Error('convention lacks long-term rule')
 
 const route = routes.find((r) => r.path === '/plugins/dsh-task-panel/state')

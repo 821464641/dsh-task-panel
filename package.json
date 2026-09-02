@@ -1,7 +1,7 @@
 {
   "name": "@dsh-local/task-panel",
-  "version": "0.1.3",
-  "description": "任务面板：悬浮小窗展示当前会话的短期(待办)与长期(目标/子代理)任务进度与耗时",
+  "version": "0.1.4",
+  "description": "任务面板：悬浮小窗展示当前会话的用户级任务——短期(用户让会话做的事)与长期(目标)的进度与耗时",
   "type": "module",
   "main": "lib/index.js",
   "exports": {
