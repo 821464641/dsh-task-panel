@@ -1,0 +1,17 @@
+# dsh-task-panel bundle patch: mounts the task-panel plugin into the host
+# composition of a dsh profile.
+#
+# The plugin registers an HTTP state route (`/plugins/dsh-task-panel/state`)
+# that serves the CURRENT session's task data (todo list, goal, subagent
+# children) as JSON, and ships a browser client module that renders the
+# floating Task Panel (bottom-right, draggable, collapsible).
+#
+# Install: `dsh plugin --profile <name> add <this package>` (npm or a local
+# path). The `dsh plugin` command pnpm-installs the package into the profile
+# and reconciles it into the profile's `dsh.profile.bundles` layer list.
+- insert:
+    - id: task-panel
+      # Node-resolvable package name — must stay in sync with package.json
+      # `name`. Quoted because `@` is a reserved indicator in YAML and cannot
+      # open a plain scalar.
+      name: '@dsh-local/task-panel'
