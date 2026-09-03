@@ -116,9 +116,11 @@ GET /plugins/dsh-task-panel/state?session=<sessionId>
 
 | 项 | 语义 |
 |---|---|
-| todos 重置 | 与官方 `todos` 投影一致：`turn/start` 清空；`todo/write` 整表替换（事件溯源，last-write-wins） |
+| todos 重置 | 面板语义（与官方投影不同）：`todo/write` 整表替换（事件溯源，last-write-wins）；**`turn/start` 不清空**——清单跨轮保留直到被替换（官方投影每轮清空，面板为「持续可见」刻意保留） |
+| **todo 权威性** | Agent 一旦在本会话写过任何清单（`hasTodoHistory`），最新清单即为权威（即使为空）；从未写过才使用兜底推导，避免「Agent 明确清空后旧请求复活」 |
 | **短期任务粒度** | 面板的短期任务=「用户要做的事」：用户每次让会话「去做某件事」都对应一条（一句话含多件事拆多条；与用户共同商定做的事同样计入；问题/咨询/确认语不记录）；其执行过程（装工具、跑命令、验证、清理、汇报等）不算任务。该约定由宿主在 apply 时通过系统提示词段（`task-panel:task-convention`，order 116）向每个会话的代理声明（见 §4.4） |
-| **兜底自动识别** | 当 Agent 未写任何 todo 清单时（内置工具说明允许琐碎任务跳过清单），路由从**当前轮**（最后一个 turn/start 之后）的 `user/message`（`source.kind === 'user'`）推导任务：剔除确认语/问题/闲聊、去除「请/帮我」等礼貌前缀，每条请求一条任务，最新一条标记 `in_progress`（见 §4.5）。Agent 清单非空时优先于兜底 |
+| **兜底自动识别** | 当 Agent 从未写过任何 todo 清单时（内置工具说明允许琐碎任务跳过清单），路由从**会话全部** `user/message`（`source.kind === 'user'`）跨轮积累推导任务：剔除确认语/问题/闲聊、去除「请/帮我」等礼貌前缀、按标题去重，每条请求一条任务，最新一条标记 `in_progress`（见 §4.5） |
+| **疑似长期需求** | 会话无目标时，从用户消息中匹配长期意图关键词（长期/持续/维护/跟踪/定期/项目/规划…）生成 `goalHints`（≤3 条）；客户端在长期任务区显示虚线提示框（见 §5.3）。一旦建立目标，`goalHints` 置空 |
 | **长期任务粒度** | 长期任务=同一目标的当前视图。目标应只对应「用户明确要求的长期完成目标」或「与用户共同商定的长期任务」：`create_goal` 官方约束（发起于直接用户请求）保持不变，约定进一步要求一个用户可见长期任务=一个目标、不为内部子目标/分段/代理自我推进计划创建目标 |
 | **内部机制不展示** | 子代理、后台任务、工作流为代理执行手段，既不进入长期任务，也不被宿主路由读取（v0.1.3 起） |
 | startedAt / endedAt | **派生时间**，不是待办自身字段（待办仅存 content+status）。取「首次出现该状态」的时间；状态反复不重置 |
@@ -166,11 +168,14 @@ export function apply(ctx) {
 ```
 state = null
 for event in session.events (顺序遍历):
-  if event.type == 'turn/start':  state = null
-  if event.type == 'todo/write':  state = event.data.todos
-                                  记录每项首次 in_progress / completed 的 event.time
+  if event.type == 'todo/write':   state = event.data.todos        # 整表替换（last-write-wins）
+                                   记录每项首次 in_progress / completed 的 event.time
+# 注意：不做 turn/start 清空——面板跨轮保留清单（与官方投影不同，见 §3.3）
 输出: state.map(item => { content, status, startedAt, endedAt })
 ```
+
+`hasTodoHistory(session)`：会话中是否存在任意一次合法 `todo/write`。有 → 最新清单为权威（含 `[]` 空清单）；
+无 → 使用 §4.5 兜底推导（避免 Agent 明确清空后用户旧请求被复活）。
 
 复杂度 O(事件数) 每请求；会话日志长时依赖数组遍历（无缓存），但频率每分钟一次，可接受。
 未来优化：改为增量游标缓存（记录上次折叠到的 seq）。
@@ -197,20 +202,21 @@ ctx.get('systemPrompt').section({
 - 给出用户侧示例（「请将这个插件提交到 GitHub」→「发布插件到 GitHub」一条；「将该插件移入 D:\...，并且要有详细的文档」→「移动插件文件位置」「撰写介绍文档」两条）以锚定短期粒度；
 - 强调**必须**登记（覆盖工具描述中「琐碎任务可跳过」的豁免），并说明未登记时面板会以用户消息原文临时展示；
 - 明确排除项（短期）：安装工具、生成密钥、运行命令、语法检查、验证/预检、清理旧副本、写测试、汇总汇报等执行过程操作，以及用户的问题/咨询/确认语（「好了」「可以」「谢谢」）；
-- 长期规则：目标只对应用户明确/商定的长期完成目标，一个用户可见长期任务=一个目标，不为内部子目标/分段创建；子代理等内部机制不产生目标、不进入清单；
+- 长期规则：当用户明确表达长期目标（长期维护/持续跟踪/一直做/定期…）时**必须**建立目标；一个用户可见长期任务=一个目标，不为内部子目标/分段创建；子代理等内部机制不产生目标、不进入清单；
 
-### 4.5 foldUserTasks 兜底推导（无清单时的自动识别）
+### 4.5 foldUserTasks 兜底推导（从无清单会话的用户消息自动识别）
 
-当 Agent 未写 todo 清单时（内置说明允许琐碎工作跳过，导致其他会话长期看不到任务），
+当 Agent **从未**写 todo 清单时（内置说明允许琐碎工作跳过，导致其他会话长期看不到任务），
 宿主路由用确定性启发式从会话日志推导短期任务：
 
 ```
-for event in session.events (顺序遍历，turn/start 重置收集器):
+byTitle = Map()
+for event in session.events (顺序遍历，跨轮积累，不做 turn/start 重置):
   if event.type == 'user/message' 且 data.source.kind == 'user':
       text    = 拼接 content 中 type='text' 块的 text
       title   = cleanTaskTitle(text)          # 见下
-      tasks.push({ content: title, status: 'pending', startedAt: event.time })
-最新一条 → status = 'in_progress'
+      if title 且 !byTitle.has(title): byTitle.set(title, { content: title, status: 'pending', startedAt: event.time })
+按 startedAt 倒序输出（最新在前，截取 12 条）；首条 → status = 'in_progress'
 ```
 
 `cleanTaskTitle` 判定规则（保守设计，宁缺勿滥；Agent 清单可完全覆盖兜底结果）：
@@ -220,9 +226,15 @@ for event in session.events (顺序遍历，turn/start 重置收集器):
 4. 去除开头礼貌前缀（`请你/麻烦你/请帮我/帮我/帮忙/请/麻烦`）作为标题；
 5. `source.kind !== 'user'`（goal 轮、插件通知）不参与。
 
-该推导每条请求一条任务、最新一条标记进行中，使面板在**任何会话**都能主动显示短期任务；
-Agent 一旦写入清单（列表非空）即整体切换为清单数据（带真实进度与完成态）。
-- 不改变 todo / goal 的工具语义（todo 整表替换 + turn/start 清空；goal 轮次/阶段机制不变），只改变「写什么粒度」。
+### 4.6 collectGoalHints 疑似长期需求
+
+会话无目标时，复用 `cleanTaskTitle`/`messageText` 扫描全部用户消息，
+凡匹配长期意图关键词（`长期|持续|维护|跟踪|定期|常态化|一直|系列|项目|规划|阶段|迭代`）者，
+按时间去重后生成 `goalHints`（≤3 条）随响应下发；客户端在长期任务区渲染虚线提示框（§5.3）。
+目标一旦建立，`goalHints` 即置空。
+
+该推导使面板在**任何会话**都能主动显示短期任务并提示疑似长期需求；
+Agent 一旦写过清单（`hasTodoHistory`），清单即权威数据（带真实进度与完成态）。
 
 ---
 
@@ -327,11 +339,11 @@ Browser                                 Host
 
 `smoke.mjs`（Node，无框架）：
 1. 断言任务粒度约定段已注册（`task-panel:task-convention`，含短期与长期规则）；
-2. 构造带 `turn/start` + 两次 `todo/write` 的会话日志 → 断言折叠结果与 derived 时间；
+2. 构造带 `turn/start` + 两次 `todo/write` 的会话日志 → 断言折叠结果与 derived 时间，**且尾随 `turn/start` 不清空清单**（跨轮保留）；
 3. 构造 goal 视图与 agent → 断言映射（含 maxGoalRounds/blockedReason/时间戳）；
 4. **断言响应中不存在 `subagents` 字段**（内部执行机制不外泄）；
-5. 兜底推导：无 todo 清单的会话 → 用户消息衍生任务（礼貌前缀去除、确认语/问题剔除、最新一条 in_progress）；
-6. 多方请求一轮 → 各成一条，最新 in_progress；
+5. 兜底推导：从未写清单的会话 → 用户消息**跨轮积累**（旧轮请求保留、确认语/问题剔除、礼貌前缀去除、最新一条 in_progress）；
+6. 长期意图消息 → `goalHints` 命中（有目标或无关消息时为 0 或空）；
 7. 断言空 session 参数 → `session: null` 空载荷；
 8. 断言未知 session → 200 + 空数据（优雅降级）。
 
