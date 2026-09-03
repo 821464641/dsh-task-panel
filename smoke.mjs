@@ -20,6 +20,8 @@ const services = {
   sessions: {
     get(id) {
       if (id === 's1') return sessions1
+      if (id === 's2') return sessions2
+      if (id === 's3') return sessions3
       return undefined
     },
   },
@@ -62,6 +64,25 @@ const sessions1 = {
       { content: 'B', status: 'in_progress' },
       { content: 'C', status: 'pending' },
     ] } },
+  ],
+}
+
+// No todo/write at all: the host must derive tasks from the user's messages.
+const sessions2 = {
+  events: [
+    { seq: 0, time: 1000, type: 'turn/start', data: {} },
+    { seq: 1, time: 1500, type: 'user/message', data: { source: { kind: 'user' }, content: [{ type: 'text', text: '请将这个插件提交到 GitHub' }] } },
+    { seq: 2, time: 1600, type: 'user/message', data: { source: { kind: 'user' }, content: [{ type: 'text', text: '好了' }] } },
+    { seq: 3, time: 1700, type: 'user/message', data: { source: { kind: 'user' }, content: [{ type: 'text', text: '这个怎么用？' }] } },
+  ],
+}
+
+// Two real requests in one turn: both derived, newest in_progress.
+const sessions3 = {
+  events: [
+    { seq: 0, time: 1000, type: 'turn/start', data: {} },
+    { seq: 1, time: 1100, type: 'user/message', data: { source: { kind: 'user' }, content: [{ type: 'text', text: '移动插件文件位置' }] } },
+    { seq: 2, time: 1200, type: 'user/message', data: { source: { kind: 'user' }, content: [{ type: 'text', text: '撰写介绍文档' }] } },
   ],
 }
 
@@ -115,6 +136,22 @@ if (empty.body.todos.length !== 0) throw new Error('empty param should have no t
 const missing = await invoke('/plugins/dsh-task-panel/state?session=nope')
 if (missing.status !== 200 || missing.body.session !== 'nope' || missing.body.todos.length !== 0) {
   throw new Error('missing session should degrade gracefully')
+}
+
+// Fallback derivation: no todo list → tasks come from user messages.
+const derived = await invoke('/plugins/dsh-task-panel/state?session=s2')
+if (derived.body.todos.length !== 1) throw new Error('derived tasks: expected 1, got ' + derived.body.todos.length)
+const d0 = derived.body.todos[0]
+if (d0.content !== '将这个插件提交到 GitHub') throw new Error('derived title mismatch: ' + JSON.stringify(d0))
+if (d0.status !== 'in_progress' || d0.startedAt !== 1500 || d0.endedAt !== null) throw new Error('derived status/time mismatch: ' + JSON.stringify(d0))
+
+const derived2 = await invoke('/plugins/dsh-task-panel/state?session=s3')
+if (derived2.body.todos.length !== 2) throw new Error('derived tasks s3: expected 2, got ' + derived2.body.todos.length)
+if (derived2.body.todos[0].content !== '移动插件文件位置' || derived2.body.todos[0].status !== 'pending') {
+  throw new Error('derived s3 first mismatch: ' + JSON.stringify(derived2.body.todos[0]))
+}
+if (derived2.body.todos[1].content !== '撰写介绍文档' || derived2.body.todos[1].status !== 'in_progress') {
+  throw new Error('derived s3 newest should be in_progress: ' + JSON.stringify(derived2.body.todos[1]))
 }
 
 console.log('\nSMOKE TEST PASSED ✔')
