@@ -22,6 +22,8 @@ const services = {
       if (id === 's1') return sessions1
       if (id === 's2') return sessions2
       if (id === 's3') return sessions3
+      if (id === 's4') return sessions4
+      if (id === 's5') return sessions5
       return undefined
     },
   },
@@ -89,6 +91,28 @@ const sessions3 = {
     { seq: 0, time: 1000, type: 'turn/start', data: {} },
     { seq: 1, time: 1100, type: 'user/message', data: { source: { kind: 'user' }, content: [{ type: 'text', text: '移动插件文件位置' }] } },
     { seq: 2, time: 1200, type: 'user/message', data: { source: { kind: 'user' }, content: [{ type: 'text', text: '撰写介绍文档' }] } },
+  ],
+}
+
+// STALE agent list + NEW user request after it: the request must merge in.
+const sessions4 = {
+  events: [
+    { seq: 0, time: 1000, type: 'turn/start', data: {} },
+    { seq: 1, time: 2000, type: 'todo/write', data: { todos: [{ content: '旧任务A', status: 'in_progress' }] } },
+    { seq: 2, time: 3000, type: 'user/message', data: { source: { kind: 'user' }, content: [{ type: 'text', text: '请重新整理文档结构' }] } },
+  ],
+}
+
+// The agent acknowledged the request with a NEW list: derived entry vanishes.
+const sessions5 = {
+  events: [
+    { seq: 0, time: 1000, type: 'turn/start', data: {} },
+    { seq: 1, time: 2000, type: 'todo/write', data: { todos: [{ content: '旧任务A', status: 'in_progress' }] } },
+    { seq: 2, time: 3000, type: 'user/message', data: { source: { kind: 'user' }, content: [{ type: 'text', text: '请重新整理文档结构' }] } },
+    { seq: 3, time: 4000, type: 'todo/write', data: { todos: [
+      { content: '新任务B', status: 'in_progress' },
+      { content: '旧任务A', status: 'completed' },
+    ] } },
   ],
 }
 
@@ -172,5 +196,22 @@ if (derived2.body.todos[1].content !== '移动插件文件位置' || derived2.bo
   throw new Error('derived s3 second mismatch: ' + JSON.stringify(derived2.body.todos[1]))
 }
 if (derived2.body.goalHints.length !== 0) throw new Error('s3 should have no goal hints')
+
+// STALE list + new request: merged, new request pending (list has in_progress).
+const merged = await invoke('/plugins/dsh-task-panel/state?session=s4')
+if (merged.body.todos.length !== 2) throw new Error('merged: expected 2, got ' + JSON.stringify(merged.body.todos))
+if (merged.body.todos[0].content !== '旧任务A' || merged.body.todos[0].status !== 'in_progress') {
+  throw new Error('merged list item mismatch: ' + JSON.stringify(merged.body.todos[0]))
+}
+const mergedNew = merged.body.todos.find((t) => t.content === '重新整理文档结构')
+if (!mergedNew || mergedNew.status !== 'pending' || mergedNew.startedAt !== 3000 || mergedNew.endedAt !== null) {
+  throw new Error('merged derived request mismatch: ' + JSON.stringify(mergedNew))
+}
+
+// New list acknowledges the request: derived entry vanishes, list is authority.
+const ack = await invoke('/plugins/dsh-task-panel/state?session=s5')
+if (ack.body.todos.length !== 2) throw new Error('ack: expected 2, got ' + JSON.stringify(ack.body.todos))
+if (ack.body.todos.some((t) => t.content === '重新整理文档结构')) throw new Error('ack: derived entry must vanish')
+if (!ack.body.todos.find((t) => t.content === '新任务B' && t.status === 'in_progress')) throw new Error('ack: 新任务B mismatch')
 
 console.log('\nSMOKE TEST PASSED ✔')
