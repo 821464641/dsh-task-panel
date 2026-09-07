@@ -3,13 +3,26 @@
  * and exercises the registered route end to end.
  */
 import { apply } from './lib/index.js'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+
+// Isolate the LLM-authored task store before any tool/route call.
+process.env.DSH_TASK_PANEL_STATE_DIR = mkdtempSync(join(tmpdir(), 'task-panel-smoke-'))
 
 const routes = []
+const registeredTools = []
 let captured = null
 
 const services = {
   systemPrompt: {
     section(s) { promptSections.push(s) },
+  },
+  tools: {
+    register(tool) {
+      registeredTools.push(tool)
+      return () => {}
+    },
   },
   webServer: {
     register(route) {
@@ -120,8 +133,9 @@ apply(ctx)
 
 const convention = promptSections.find((s) => s.name === 'task-panel:task-convention')
 if (convention === undefined) throw new Error('task convention prompt section not registered')
-if (!convention.text.includes('去做某件事')) throw new Error('convention lacks expanded short-term rule')
-if (!convention.text.includes('执行过程里的操作不算任务')) throw new Error('convention lacks execution-exclusion rule')
+if (!convention.text.includes('task_panel_update')) throw new Error('convention lacks LLM write port rule')
+if (!convention.text.includes('不算任务')) throw new Error('convention lacks exclusion rule')
+if (!convention.text.includes('场景例库')) throw new Error('convention lacks example library')
 if (!convention.text.includes('长期任务')) throw new Error('convention lacks long-term rule')
 
 const route = routes.find((r) => r.path === '/plugins/dsh-task-panel/state')
@@ -213,5 +227,33 @@ const ack = await invoke('/plugins/dsh-task-panel/state?session=s5')
 if (ack.body.todos.length !== 2) throw new Error('ack: expected 2, got ' + JSON.stringify(ack.body.todos))
 if (ack.body.todos.some((t) => t.content === '重新整理文档结构')) throw new Error('ack: derived entry must vanish')
 if (!ack.body.todos.find((t) => t.content === '新任务B' && t.status === 'in_progress')) throw new Error('ack: 新任务B mismatch')
+
+// ── task_panel_update tool + LLM-store priority ──────────────────────────────
+const tool = registeredTools.find((t) => t.name === 'task_panel_update')
+if (tool === undefined) throw new Error('task_panel_update tool not registered')
+if (!tool.description.includes('整表替换')) throw new Error('tool description mismatch')
+
+const toolResult = await tool.execute(
+  { tasks: [
+    { title: 'LLM概括的任务', status: 'in_progress', summary: '这是 LLM 写的摘要内容' },
+    { title: '已完成的旧任务', status: 'completed' },
+  ] },
+  { agent: { id: 's4' } },
+)
+if (!Array.isArray(toolResult.tasks) || toolResult.tasks.length !== 2) throw new Error('tool result mismatch')
+
+// The store is authoritative even when the session has a stale todo list:
+// s4's merged logic (旧任务A + derived) must be replaced by the LLM list.
+const llmFirst = await invoke('/plugins/dsh-task-panel/state?session=s4')
+if (llmFirst.body.todos.length !== 2) throw new Error('llm store: expected 2, got ' + JSON.stringify(llmFirst.body.todos))
+const llm0 = llmFirst.body.todos.find((t) => t.content === 'LLM概括的任务')
+if (!llm0 || llm0.status !== 'in_progress' || llm0.summary !== '这是 LLM 写的摘要内容') {
+  throw new Error('llm store item mismatch: ' + JSON.stringify(llm0))
+}
+if (llmFirst.body.todos.some((t) => t.content === '旧任务A')) throw new Error('llm store must replace stale list')
+
+// Sessions without a store keep the heuristic path unchanged (s3 asserted above).
+
+rmSync(process.env.DSH_TASK_PANEL_STATE_DIR, { recursive: true, force: true })
 
 console.log('\nSMOKE TEST PASSED ✔')
